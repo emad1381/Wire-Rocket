@@ -229,9 +229,9 @@ Address = 10.0.0.1/30
 ListenPort = $WG_PORT
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
-SaveConfig = true
+SaveConfig = false
 FwMark = 0x51820
-PostUp = iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -C POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE
+PostUp = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE 2>/dev/null; iptables -t nat -A POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; iptables -t nat -D POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE 2>/dev/null; true
 
 [Peer]
@@ -337,7 +337,7 @@ Address = 10.0.0.2/30
 ListenPort = $WG_PORT
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
-SaveConfig = true
+SaveConfig = false
 FwMark = 0x51820
 
 [Peer]
@@ -367,10 +367,14 @@ EOF
     echo "" >> "$WG_CONF"
     DEFAULT_IFACE=$(detect_default_interface)
     # Generate PostUp rules that don't duplicate
+    # Append PostUp/PostDown to config
+    echo "" >> "$WG_CONF"
+    DEFAULT_IFACE=$(detect_default_interface)
+    # Generate PostUp rules: Delete first (to clear old), then Add (clean start)
     cat >> "$WG_CONF" << POSTEOF
-PostUp = iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT
-PostUp = iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -j ACCEPT
-PostUp = iptables -t nat -C POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE
+PostUp = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; iptables -A FORWARD -i %i -j ACCEPT
+PostUp = iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null; iptables -A FORWARD -o %i -j ACCEPT
+PostUp = iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; true
 PostDown = iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null; true
 PostDown = iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null; true
@@ -416,11 +420,15 @@ EOF
     systemctl stop wg-quick@wg0 >/dev/null 2>&1
     wg-quick down wg0 >/dev/null 2>&1
     
-    if wg-quick up wg0; then
+    # Capture output to show real error
+    if OUTPUT=$(wg-quick up wg0 2>&1); then
         systemctl enable wg-quick@wg0 >/dev/null 2>&1
         echo -e "${GREEN}[✓] Interface started successfully!${NC}"
     else
         echo -e "${RED}[X] Failed to start WireGuard interface!${NC}"
+        echo -e "${YELLOW}--- Error Detail ---${NC}"
+        echo "$OUTPUT"
+        echo -e "${YELLOW}--------------------${NC}"
         echo -e "${YELLOW}[DEBUG] Check 'systemctl status wg-quick@wg0' or 'journalctl -xe' for details.${NC}"
         echo -e "${YELLOW}[NOTE] You can still proceed, but the tunnel is not active yet.${NC}"
         # Do not exit, show keys so user can fix config later
