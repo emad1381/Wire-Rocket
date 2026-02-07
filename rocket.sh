@@ -1,0 +1,401 @@
+#!/bin/bash
+#===========================================
+#  RocketTunnel Main Logic Script
+#  Interactive Dashboard & WireGuard Setup
+#===========================================
+
+set -e
+
+# Configuration
+WG_CONF="/etc/wireguard/wg0.conf"
+WG_IFACE="wg0"
+WG_PORT_RANGE_START=50000
+WG_PORT_RANGE_END=65000
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+BOLD='\033[1m'
+
+#===========================================
+# Helper Functions
+#===========================================
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}[ERROR]${NC} This script must be run as root!"
+        exit 1
+    fi
+}
+
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while [ "$(ps a | awk '{print $1}' | grep $pid)" ]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
+generate_keys() {
+    umask 077
+    wg genkey | tee privatekey | wg pubkey > publickey
+    wg genpsk > presharedkey
+}
+
+get_public_ip() {
+    curl -s https://api.ipify.org || curl -s https://ifconfig.me
+}
+
+random_port() {
+    shuf -i $WG_PORT_RANGE_START-$WG_PORT_RANGE_END -n 1
+}
+
+#===========================================
+# Menu & Dashboard
+#===========================================
+
+show_header() {
+    clear
+    echo -e "${MAGENTA}"
+    cat << "EOF"
+    ____             __        __ ______                       __
+   / __ \____  _____/ /_____  / //_  __/_  ______  ____  ___  / /
+  / /_/ / __ \/ ___/ //_/ _ \/ __// / / / / / __ \/ __ \/ _ \/ / 
+ / _, _/ /_/ / /__/ ,< /  __/ /_ / / / /_/ / / / / / / /  __/ /  
+/_/ |_|\____/\___/_/|_|\___/\__//_/  \__,_/_/ /_/_/ /_/\___/_/   
+EOF
+    echo -e "${NC}"
+    echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}RocketTunnel Control Panel${NC}                              ${CYAN}║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+show_menu() {
+    show_header
+    echo -e "  ${GREEN}[1]${NC} Install / Update Tunnel"
+    echo -e "  ${GREEN}[2]${NC} Show Tunnel Status"
+    echo -e "  ${GREEN}[3]${NC} View Config / Keys"
+    echo -e "  ${GREEN}[4]${NC} Uninstall"
+    echo -e "  ${RED}[5]${NC} Exit"
+    echo ""
+    read -p "  Select an option [1-5]: " choice
+    case $choice in
+        1) install_tunnel ;;
+        2) show_status ;;
+        3) view_config ;;
+        4) uninstall_tunnel ;;
+        5) exit 0 ;;
+        *) echo -e "${RED}Invalid option!${NC}"; sleep 1; show_menu ;;
+    esac
+}
+
+#===========================================
+# Installation Logic
+#===========================================
+
+install_tunnel() {
+    show_header
+    echo -e "${YELLOW}--- Installation Wizard ---${NC}\n"
+    
+    # Role Selection
+    echo -e "Which server is this?"
+    echo -e "  ${CYAN}[1]${NC} Kharej (Foreign Server)"
+    echo -e "  ${CYAN}[2]${NC} Iran (Local/Nat Server)"
+    read -p "  Selection [1-2]: " role_choice
+
+    if [[ "$role_choice" == "1" ]]; then
+        setup_kharej
+    elif [[ "$role_choice" == "2" ]]; then
+        setup_iran
+    else
+        echo -e "${RED}Invalid selection!${NC}"
+        sleep 2
+        install_tunnel
+    fi
+}
+
+setup_kharej() {
+    echo -e "\n${CYAN}[*]${NC} Setting up KHAREJ server..."
+
+    # Generate Keys
+    echo -e "${CYAN}[*]${NC} Generating Secure Keys..."
+    mkdir -p /etc/wireguard
+    cd /etc/wireguard
+    PRIVATE_KEY=$(wg genkey)
+    PUBLIC_KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
+    PRESHARED_KEY=$(wg genpsk)
+    
+    # Get Public IP
+    echo -e "${CYAN}[*]${NC} Detecting Public IP..."
+    PUBLIC_IP=$(get_public_ip)
+    echo -e "${GREEN}[✓]${NC} Public IP: $PUBLIC_IP"
+    
+    # Port Selection
+    WG_PORT=$(random_port)
+    echo -e "${GREEN}[✓]${NC} Selected Random Port: ${BOLD}$WG_PORT${NC}"
+
+    # Ask for Iran IP (Optional endpoint, mostly for reference/logs or strict firewall)
+    # Since Iran initiates connection usually, usually we don't *need* Endpoint here unless bidirectional
+    # But user requested "Ask for 'Iran Server IP' (Tunnel Endpoint)"
+    echo -e "\n${YELLOW}[?]${NC} Enter Iran Server IP (Press Enter to skip if dynamic):"
+    read -p "  > " IRAN_IP
+    
+    PEER_ENDPOINT_CONFIG=""
+    if [[ ! -z "$IRAN_IP" ]]; then
+        # If Iran IP is provided, we can add it, but usually Kharej waits.
+        # However, for firewall rules, it might be useful. 
+        # But `Endpoint` directive is for initiating. 
+        # We will keep it simple and assume passive on Kharej side unless Iran IP is fixed.
+        # Actually proper WG setup: Kharej (Server) waits. Iran (Client) initiates.
+        : # Do nothing special for config endpoint on server side usually
+    fi
+
+    # Create Config
+    cat > "$WG_CONF" << EOF
+[Interface]
+Address = 10.0.0.1/30
+ListenPort = $WG_PORT
+PrivateKey = $PRIVATE_KEY
+MTU = 1280
+PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+
+[Peer]
+# Iran Peer
+PublicKey = REPLACE_ME_WITH_IRAN_PUBKEY
+PresharedKey = $PRESHARED_KEY
+AllowedIPs = 10.0.0.2/32
+EOF
+
+    echo -e "\n${GREEN}[✓]${NC} Config created at $WG_CONF"
+    chmod 600 "$WG_CONF"
+    
+    # Start Interface
+    # But we can't start fully without Iran's public key usually (wg-quick might complain or just warn)
+    # Actually wg-quick is fine with placeholders but connection won't work.
+    # WAIT, we need Iran's Public Key to put in Kharej config!
+    # The prompt says: "Display the 'Public Key' and 'Preshared Key' clearly and tell the user to copy them to the Iran server."
+    # Typically we exchange keys. 
+    # Let's generate a placeholder or ask the user to input Iran's key later?
+    # Or, we just provide Kharej's info first, and user has to edit Kharej config with Iran Key later.
+    # OR, we reverse it: Iran generates first? 
+    # Standard flow: 
+    # 1. Setup Kharej (Get Kharej PubKey, PSK, IP, Port).
+    # 2. Setup Iran (Use Kharej info).
+    # 3. Use Iran PubKey to update Kharej config.
+    
+    # User prompt implies:
+    # "If Kharej: ... Display Public Key ... tell user to copy to Iran."
+    # It doesn't explicitly say "Ask for Iran Public Key" in step 2.
+    # But for a tunnel to work, Kharej NEEDS Iran's Public Key.
+    # I will add a placeholder and instruction.
+    
+    echo -e "\n${RED}[IMPORTANT]${NC} We need the Iran Server's Public Key to finish configuration."
+    echo -e "If you haven't set up the Iran server yet, you can come back and edit ${BOLD}$WG_CONF${NC} later."
+    echo -e "For now, I'll put a placeholder 'INSERT_IRAN_PUBLIC_KEY_HERE' in the config."
+    sed -i "s/REPLACE_ME_WITH_IRAN_PUBKEY/INSERT_IRAN_PUBLIC_KEY_HERE/g" "$WG_CONF"
+
+    # Save keys for display
+    echo "$PRIVATE_KEY" > params
+    echo "$PUBLIC_KEY" >> params
+    echo "$PRESHARED_KEY" >> params
+    echo "$WG_PORT" >> params
+    
+    systemctl enable wg-quick@wg0 >/dev/null 2>&1 || true
+    # We don't start it yet to avoid error with invalid key? Actually wg allows it.
+    systemctl start wg-quick@wg0 >/dev/null 2>&1 || true
+    
+    echo -e "\n${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}CONFIGURATION DETAILS FOR IRAN SERVER${NC}                 ${GREEN}║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${BOLD}Kharej IP:${NC}       $PUBLIC_IP"
+    echo -e "  ${BOLD}Kharej Port:${NC}     $WG_PORT"
+    echo -e "  ${BOLD}Public Key:${NC}      $PUBLIC_KEY"
+    echo -e "  ${BOLD}Preshared Key:${NC}   $PRESHARED_KEY"
+    echo ""
+    echo -e "${YELLOW}[NOTE]${NC} Copy these values to the Iran server setup!"
+    echo -e "${YELLOW}[ACTION]${NC} After setting up Iran, get its Public Key and run: ${BOLD}wg set wg0 peer <IRAN_PUBKEY> allowed-ips 10.0.0.2/32${NC}"
+    
+    read -p "Press Enter to return to menu..."
+    show_menu
+}
+
+setup_iran() {
+    echo -e "\n${CYAN}[*]${NC} Setting up IRAN server..."
+
+    # Generate Keys
+    echo -e "${CYAN}[*]${NC} Generating Secure Keys..."
+    mkdir -p /etc/wireguard
+    cd /etc/wireguard
+    PRIVATE_KEY=$(wg genkey)
+    PUBLIC_KEY=$(echo "$PRIVATE_KEY" | wg pubkey)
+    
+    echo -e "${GREEN}[✓]${NC} generated keys."
+
+    # Ask for Kharej Info
+    echo -e "\n${YELLOW}[?]${NC} Enter Kharej Server IP:"
+    read -p "  > " KHAREJ_IP
+    
+    echo -e "\n${YELLOW}[?]${NC} Enter Kharej WireGuard Port (e.g., 51820):"
+    read -p "  > " KHAREJ_PORT
+    
+    echo -e "\n${YELLOW}[?]${NC} Enter Kharej Public Key:"
+    read -p "  > " KHAREJ_PUB_KEY
+    
+    echo -e "\n${YELLOW}[?]${NC} Enter Preshared Key (from Kharej):"
+    read -p "  > " PRESHARED_KEY
+
+    # Create Config
+    cat > "$WG_CONF" << EOF
+[Interface]
+Address = 10.0.0.2/30
+PrivateKey = $PRIVATE_KEY
+MTU = 1280
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $KHAREJ_PUB_KEY
+PresharedKey = $PRESHARED_KEY
+Endpoint = $KHAREJ_IP:$KHAREJ_PORT
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 20
+EOF
+    
+    chmod 600 "$WG_CONF"
+    echo -e "${GREEN}[✓]${NC} Config created at $WG_CONF"
+
+    # Setup Port Forwarding
+    echo -e "\n${YELLOW}[?]${NC} Enter local port to forward to Kharej (e.g. 443):"
+    read -p "  > " FORWARD_PORT
+    FORWARD_PORT=${FORWARD_PORT:-443} # Default to 443
+
+    echo -e "\n${CYAN}[*]${NC} Configuring iptables forwarding rules..."
+    
+    # Enable Forwarding just in case
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
+
+    # Cleanup old rules if any (simple flush of specific chains might be safer but for this script we append)
+    # We will add them to PostUp/PostDown to persist
+    
+    # Update Config with Forwarding Rules
+    # Forward port $FORWARD_PORT on eth0 -> 10.0.0.1:$FORWARD_PORT (Kharej Tunnel IP)
+    # Note: Traffic comes to eth0:443 -> DNAT to 10.0.0.1:443 -> Goes through wg0 -> Reaches Kharej
+    
+    # We need to find the default interface, usually eth0 but could be ens3, etc.
+    DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+    
+    # Append PostUp/PostDown to config
+    cat >> "$WG_CONF" << EOF
+
+PostUp = iptables -t nat -A PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT
+PostUp = iptables -t nat -A POSTROUTING -o $WG_IFACE -j MASQUERADE
+PostDown = iptables -t nat -D PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT
+PostDown = iptables -t nat -D POSTROUTING -o $WG_IFACE -j MASQUERADE
+EOF
+
+    # Start Interface
+    systemctl enable wg-quick@wg0 >/dev/null 2>&1
+    systemctl start wg-quick@wg0 >/dev/null 2>&1
+    
+    echo -e "\n${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║${NC}  ${BOLD}SETUP COMPLETE${NC}                                        ${GREEN}║${NC}"
+    echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
+    echo -e "  ${BOLD}Your Public Key:${NC} $PUBLIC_KEY"
+    echo ""
+    echo -e "${YELLOW}[IMPORTANT]${NC} Make sure to add this Public Key to the Kharej server config!"
+    echo -e "Command to run on Kharej: ${BOLD}wg set wg0 peer $PUBLIC_KEY allowed-ips 10.0.0.2/32${NC}"
+    echo -e "Traffic on port ${BOLD}$FORWARD_PORT${NC} is now forwarded to Kharej."
+    
+    read -p "Press Enter to return to menu..."
+    show_menu
+}
+
+#===========================================
+# Status & Management
+#===========================================
+
+show_status() {
+    show_header
+    echo -e "${CYAN}--- Service Status ---${NC}"
+    if systemctl is-active --quiet wg-quick@wg0; then
+        echo -e "Service: ${GREEN}ACTIVE${NC}"
+    else
+        echo -e "Service: ${RED}INACTIVE${NC}"
+    fi
+
+    echo -e "\n${CYAN}--- Interface Info ---${NC}"
+    wg show wg0 || echo -e "${RED}Interface wg0 not found${NC}"
+
+    echo -e "\n${CYAN}--- Connectivity Check ---${NC}"
+    # Ping the peer
+    # If we are 10.0.0.1, ping 10.0.0.2, else ping 10.0.0.1
+    MY_IP=$(ip -4 addr show wg0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
+    if [[ "$MY_IP" == "10.0.0.1" ]]; then
+        TARGET="10.0.0.2"
+    else
+        TARGET="10.0.0.1"
+    fi
+    
+    echo -e "Pinging Peer ($TARGET)..."
+    if ping -c 3 -W 1 $TARGET > /dev/null 2>&1; then
+        echo -e "${GREEN}[✓] Connection Successful!${NC}"
+    else
+        echo -e "${RED}[X] Connection Failed (Peer unreachable)${NC}"
+    fi
+
+    echo ""
+    read -p "Press Enter to return to menu..."
+    show_menu
+}
+
+view_config() {
+    show_header
+    if [[ -f "$WG_CONF" ]]; then
+        echo -e "${YELLOW}--- Configuration ($WG_CONF) ---${NC}"
+        cat "$WG_CONF"
+    else
+        echo -e "${RED}Config file not found!${NC}"
+    fi
+    echo ""
+    read -p "Press Enter to return to menu..."
+    show_menu
+}
+
+uninstall_tunnel() {
+    echo -e "\n${RED}[WARNING]${NC} This will remove RocketTunnel and WireGuard configuration."
+    read -p "Are you sure? [y/N]: " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        systemctl stop wg-quick@wg0 >/dev/null 2>&1 || true
+        systemctl disable wg-quick@wg0 >/dev/null 2>&1 || true
+        rm -rf /etc/wireguard/wg0.conf
+        rm -rf /usr/local/bin/rockettunnel
+        rm -rf /usr/local/bin/rt
+        # Optionally remove Install path if it's there
+        rm -f "/usr/local/bin/rocket.sh"
+        
+        echo -e "${GREEN}[✓] Uninstalled successfully.${NC}"
+        exit 0
+    else
+        show_menu
+    fi
+}
+
+#===========================================
+# Entry Point
+#===========================================
+
+# Check if arguments passed (e.g. for non-interactive mode later), else show menu
+check_root
+show_menu

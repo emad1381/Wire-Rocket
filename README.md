@@ -25,14 +25,14 @@
 ### One-Liner Installation
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/YOUR_USERNAME/RocketTunnel/main/install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/emad1381/Wire-Rocket/main/install.sh)
 ```
 
 Or clone and run manually:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/RocketTunnel.git
-cd RocketTunnel
+git clone https://github.com/emad1381/Wire-Rocket.git
+cd Wire-Rocket
 chmod +x install.sh rocket.sh
 ./install.sh
 ```
@@ -97,7 +97,7 @@ chmod +x install.sh rocket.sh
 
 1. **Run the installer:**
    ```bash
-   bash <(curl -sL https://raw.githubusercontent.com/YOUR_USERNAME/RocketTunnel/main/install.sh)
+   bash <(curl -sL https://raw.githubusercontent.com/emad1381/Wire-Rocket/main/install.sh)
    ```
 
 2. **Select Option 1** → Install / Update Tunnel
@@ -117,7 +117,7 @@ chmod +x install.sh rocket.sh
 
 1. **Run the installer:**
    ```bash
-   bash <(curl -sL https://raw.githubusercontent.com/YOUR_USERNAME/RocketTunnel/main/install.sh)
+   bash <(curl -sL https://raw.githubusercontent.com/emad1381/Wire-Rocket/main/install.sh)
    ```
 
 2. **Select Option 1** → Install / Update Tunnel
