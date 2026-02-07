@@ -222,17 +222,14 @@ setup_kharej() {
     DEFAULT_IFACE=$(detect_default_interface)
     echo -e "${GREEN}[✓]${NC} Detected default interface: $DEFAULT_IFACE"
 
-    # Create Config
+    # Create Config - Kharej is the SERVER, it does NOT need iptables rules
+    # MASQUERADE and FORWARD are only needed on IRAN (relay) side
     cat > "$WG_CONF" << EOF
 [Interface]
 Address = 10.0.0.1/30
 ListenPort = $WG_PORT
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
-SaveConfig = false
-FwMark = 0x51820
-PostUp = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE 2>/dev/null; iptables -t nat -A POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; iptables -t nat -D POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE 2>/dev/null; true
 
 [Peer]
 # Iran Peer
@@ -331,14 +328,13 @@ setup_iran() {
 
     # Create Config
     WG_PORT=$(random_port)
+    DEFAULT_IFACE=$(detect_default_interface)
     cat > "$WG_CONF" << EOF
 [Interface]
 Address = 10.0.0.2/30
 ListenPort = $WG_PORT
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
-SaveConfig = false
-FwMark = 0x51820
 
 [Peer]
 PublicKey = $KHAREJ_PUB_KEY
@@ -346,39 +342,17 @@ PresharedKey = $PRESHARED_KEY
 Endpoint = $KHAREJ_IP:$KHAREJ_PORT
 AllowedIPs = 10.0.0.0/30
 PersistentKeepalive = 20
-EOF
-    
-    chmod 600 "$WG_CONF"
-    echo -e "${GREEN}[✓]${NC} Config created at $WG_CONF"
 
-    # Add custom routing for the tunnel subnet
-    # We need to manually add the route for the tunnel IP range, but since Address is /30, kernel does it for link-local.
-    # But if we want to route specific traffic through it, we do it via policy routing or just for the peer.
-    # Actually, for a relay server, we DON'T want all traffic to go through tunnel.
-    # We only want traffic explicitly forwarded (by HAProxy or DNAT) to go there.
-    # So `AllowedIPs = 0.0.0.0/0` is fine for PERMISSION, but `Table = off` prevents it from being the DEFAULT ROUTE.
-    
-    # We also need to ensure the route to the endpoint (Kharej IP) goes through the physical interface (default gateway).
-    # Since we set Table = off, the default route remains untouched (going to Internet).
-    # HAProxy will just Proxy traffic to 10.0.0.1, which is on the link.
-    
-
-    # Append PostUp/PostDown to config
-    echo "" >> "$WG_CONF"
-    DEFAULT_IFACE=$(detect_default_interface)
-    # Generate PostUp rules that don't duplicate
-    # Append PostUp/PostDown to config
-    echo "" >> "$WG_CONF"
-    DEFAULT_IFACE=$(detect_default_interface)
-    # Generate PostUp rules: Delete first (to clear old), then Add (clean start)
-    cat >> "$WG_CONF" << POSTEOF
 PostUp = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; iptables -A FORWARD -i %i -j ACCEPT
 PostUp = iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null; iptables -A FORWARD -o %i -j ACCEPT
 PostUp = iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE
 PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; true
 PostDown = iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null; true
 PostDown = iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null; true
-POSTEOF
+EOF
+    
+    chmod 600 "$WG_CONF"
+    echo -e "${GREEN}[✓]${NC} Config created at $WG_CONF"
     
     # Initialize HAProxy Config if not present
     if [[ ! -f "$HAPROXY_CFG" ]]; then
