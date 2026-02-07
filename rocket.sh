@@ -62,6 +62,20 @@ random_port() {
     shuf -i $WG_PORT_RANGE_START-$WG_PORT_RANGE_END -n 1
 }
 
+repair_config_interface() {
+    # Auto-repair interface name in wg0.conf if it doesn't match current default
+    if [[ -f "$WG_CONF" ]]; then
+        CURRENT_DEFAULT=$(ip route | grep default | awk '{print $5}' | head -n1)
+        # Find interface used in PostUp
+        CONFIG_IFACE=$(grep -oP 'PostUp.*-o \K\w+' "$WG_CONF" | head -n1)
+        
+        if [[ ! -z "$CURRENT_DEFAULT" ]] && [[ ! -z "$CONFIG_IFACE" ]] && [[ "$CURRENT_DEFAULT" != "$CONFIG_IFACE" ]]; then
+            echo -e "${YELLOW}[AUTO-FIX]${NC} Config uses '$CONFIG_IFACE' but system uses '$CURRENT_DEFAULT'. Updating..."
+            sed -i "s/$CONFIG_IFACE/$CURRENT_DEFAULT/g" "$WG_CONF"
+        fi
+    fi
+}
+
 #===========================================
 # Menu & Dashboard
 #===========================================
@@ -96,6 +110,10 @@ show_menu() {
     echo -e "  ${RED}[8]${NC} Exit"
     echo ""
     read -p "  Select an option [1-8]: " choice
+    
+    # Run auto-repair lightly on every interaction if config exists
+    repair_config_interface
+
     case $choice in
         1) install_tunnel ;;
         2) show_status ;;
@@ -281,9 +299,11 @@ setup_iran() {
     read -p "  > " PRESHARED_KEY
 
     # Create Config
+    WG_PORT=$(random_port)
     cat > "$WG_CONF" << EOF
 [Interface]
 Address = 10.0.0.2/30
+ListenPort = $WG_PORT
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
 # DNS = 1.1.1.1 # Commented out to avoid resolvconf issues on some VPS
