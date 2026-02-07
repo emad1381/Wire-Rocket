@@ -76,6 +76,36 @@ repair_config_interface() {
     fi
 }
 
+detect_default_interface() {
+    local iface=""
+    # Method 1: Default route
+    iface=$(ip -4 route show default | awk '{print $5}' | head -n1)
+    # Method 2: Check common interface names
+    if [[ -z "$iface" ]]; then
+        for try_iface in eth0 ens3 ens33 enp0s3 enp1s0; do
+            if ip link show "$try_iface" &>/dev/null; then
+                iface="$try_iface"
+                break
+            fi
+        done
+    fi
+    echo "${iface:-eth0}"
+}
+
+validate_before_start() {
+    echo -e "${CYAN}[*] Running pre-flight checks...${NC}"
+    # Check if wg module loaded
+    if ! lsmod | grep -q wireguard; then
+        modprobe wireguard || { echo -e "${RED}[X] WireGuard kernel module not available!${NC}"; return 1; }
+    fi
+    # Check config syntax
+    if ! wg-quick strip wg0 &>/dev/null; then
+        echo -e "${RED}[X] Config syntax error or invalid key!${NC}"
+        return 1
+    fi
+    return 0
+}
+
 #===========================================
 # Menu & Dashboard
 #===========================================
@@ -189,8 +219,7 @@ setup_kharej() {
     fi
 
     # Detect Interface
-    DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
-    DEFAULT_IFACE=${DEFAULT_IFACE:-eth0}
+    DEFAULT_IFACE=$(detect_default_interface)
     echo -e "${GREEN}[✓]${NC} Detected default interface: $DEFAULT_IFACE"
 
     # Create Config
@@ -200,8 +229,10 @@ Address = 10.0.0.1/30
 ListenPort = $WG_PORT
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
-PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
-PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
+SaveConfig = true
+FwMark = 0x51820
+PostUp = iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -C POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; iptables -t nat -D POSTROUTING -s 10.0.0.0/30 -o $DEFAULT_IFACE -j MASQUERADE 2>/dev/null; true
 
 [Peer]
 # Iran Peer
@@ -306,14 +337,14 @@ Address = 10.0.0.2/30
 ListenPort = $WG_PORT
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
-# DNS = 1.1.1.1 # Commented out to avoid resolvconf issues on some VPS
-Table = off  # Prevents WireGuard from overwriting default route
+SaveConfig = true
+FwMark = 0x51820
 
 [Peer]
 PublicKey = $KHAREJ_PUB_KEY
 PresharedKey = $PRESHARED_KEY
 Endpoint = $KHAREJ_IP:$KHAREJ_PORT
-AllowedIPs = 0.0.0.0/0
+AllowedIPs = 10.0.0.0/30
 PersistentKeepalive = 20
 EOF
     
@@ -332,10 +363,18 @@ EOF
     # HAProxy will just Proxy traffic to 10.0.0.1, which is on the link.
     
 
-    # Append PostUp/PostDown to config (ONLY MASQUERADE for NAT, no specific ports)
+    # Append PostUp/PostDown to config
     echo "" >> "$WG_CONF"
-    echo "PostUp = iptables -t nat -A POSTROUTING -o $WG_IFACE -j MASQUERADE" >> "$WG_CONF"
-    echo "PostDown = iptables -t nat -D POSTROUTING -o $WG_IFACE -j MASQUERADE" >> "$WG_CONF"
+    DEFAULT_IFACE=$(detect_default_interface)
+    # Generate PostUp rules that don't duplicate
+    cat >> "$WG_CONF" << POSTEOF
+PostUp = iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT
+PostUp = iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -j ACCEPT
+PostUp = iptables -t nat -C POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; true
+PostDown = iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null; true
+PostDown = iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null; true
+POSTEOF
     
     # Initialize HAProxy Config if not present
     if [[ ! -f "$HAPROXY_CFG" ]]; then
@@ -369,6 +408,8 @@ EOF
 
     # Start Interface with Error Handling
     echo -e "\n${CYAN}[*]${NC} Starting Wire-Rocket Interface..."
+    
+    validate_before_start || { echo -e "${RED}[X] Pre-flight checks failed!${NC}"; return; }
     
     # Temporarily disable exit on error to catch start failure
     set +e
