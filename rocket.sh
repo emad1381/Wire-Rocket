@@ -88,16 +88,20 @@ show_menu() {
     echo -e "  ${GREEN}[1]${NC} Install / Update Tunnel"
     echo -e "  ${GREEN}[2]${NC} Show Tunnel Status"
     echo -e "  ${GREEN}[3]${NC} View Config / Keys"
-    echo -e "  ${GREEN}[4]${NC} Uninstall"
-    echo -e "  ${RED}[5]${NC} Exit"
+    echo -e "  ${MAGENTA}[4]${NC} Add Iran Peer (For Kharej Server)"
+    echo -e "  ${BLUE}[5]${NC} Validate Config & Test Connection"
+    echo -e "  ${RED}[6]${NC} Uninstall"
+    echo -e "  ${RED}[7]${NC} Exit"
     echo ""
-    read -p "  Select an option [1-5]: " choice
+    read -p "  Select an option [1-7]: " choice
     case $choice in
         1) install_tunnel ;;
         2) show_status ;;
         3) view_config ;;
-        4) uninstall_tunnel ;;
-        5) exit 0 ;;
+        4) add_iran_peer ;;
+        5) diagnostics_menu ;;
+        6) uninstall_tunnel ;;
+        7) exit 0 ;;
         *) echo -e "${RED}Invalid option!${NC}"; sleep 1; show_menu ;;
     esac
 }
@@ -304,13 +308,12 @@ EOF
     fi
     
     # Append PostUp/PostDown to config
-    cat >> "$WG_CONF" << EOF
-
-PostUp = iptables -t nat -A PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT
-PostUp = iptables -t nat -A POSTROUTING -o $WG_IFACE -j MASQUERADE
-PostDown = iptables -t nat -D PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT
-PostDown = iptables -t nat -D POSTROUTING -o $WG_IFACE -j MASQUERADE
-EOF
+    # Append PostUp/PostDown to config
+    echo "" >> "$WG_CONF"
+    echo "PostUp = iptables -t nat -A PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT" >> "$WG_CONF"
+    echo "PostUp = iptables -t nat -A POSTROUTING -o $WG_IFACE -j MASQUERADE" >> "$WG_CONF"
+    echo "PostDown = iptables -t nat -D PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT" >> "$WG_CONF"
+    echo "PostDown = iptables -t nat -D POSTROUTING -o $WG_IFACE -j MASQUERADE" >> "$WG_CONF"
 
     # Start Interface with Error Handling
     echo -e "\n${CYAN}[*]${NC} Starting Wire-Rocket Interface..."
@@ -342,6 +345,181 @@ EOF
     
     read -p "Press Enter to return to menu..."
     show_menu
+}
+
+#===========================================
+# Advanced Management
+#===========================================
+
+add_iran_peer() {
+    show_header
+    echo -e "${MAGENTA}--- Add Iran Peer (Kharej Side) ---${NC}"
+    
+    if [[ ! -f "$WG_CONF" ]]; then
+        echo -e "${RED}[ERROR] WireGuard config found! Install the tunnel first.${NC}"
+        read -p "Press Enter..."
+        show_menu
+        return
+    fi
+
+    # Check if already added
+    if grep -q "INSERT_IRAN_PUBLIC_KEY_HERE" "$WG_CONF"; then
+        echo -e "${YELLOW}[INFO] Placeholder found. Ready to update.${NC}"
+    else
+        echo -e "${YELLOW}[INFO] No placeholder found. Updating existing peer config.${NC}"
+    fi
+
+    echo -e "\n${CYAN}Enter the Public Key from the Iran server:${NC}"
+    read -p "  > " IRAN_PUB_KEY
+
+    if [[ -z "$IRAN_PUB_KEY" ]]; then
+        echo -e "${RED}[ERROR] Public Key cannot be empty!${NC}"
+        read -p "Press Enter..."
+        add_iran_peer
+        return
+    fi
+    
+    # Validate Key format (simple base64 check)
+    if [[ ! "$IRAN_PUB_KEY" =~ ^[A-Za-z0-9+/]{42}[=]{0,2}$ ]]; then
+        echo -e "${RED}[WARNING] Key doesn't look like a valid WireGuard Public Key.${NC}"
+        read -p "Proceed anyway? [y/N]: " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+             add_iran_peer
+             return
+        fi
+    fi
+
+    echo -e "\n${CYAN}[*] Updating configuration...${NC}"
+    
+    # If placeholder exists, replace it
+    if grep -q "INSERT_IRAN_PUBLIC_KEY_HERE" "$WG_CONF"; then
+        sed -i "s/INSERT_IRAN_PUBLIC_KEY_HERE/$IRAN_PUB_KEY/" "$WG_CONF"
+        echo -e "${GREEN}[✓] Placeholder replaced with real key.${NC}"
+    else
+        # Use wg set to update peer
+        wg set wg0 peer "$IRAN_PUB_KEY" allowed-ips 10.0.0.2/32
+        echo -e "${GREEN}[✓] Peer updated via wg tool.${NC}"
+        # Also persist in file if not using wg-quick strip
+        wg-quick save wg0 >/dev/null 2>&1 || true
+    fi
+    
+    # Restart interface to apply
+    systemctl restart wg-quick@wg0
+    
+    echo -e "${GREEN}[✓] Configuration updated and interface restarted!${NC}"
+    read -p "Press Enter to return to menu..."
+    show_menu
+}
+
+diagnostics_menu() {
+    show_header
+    echo -e "${BLUE}--- Diagnostics & Validation ---${NC}"
+    
+    echo -e "\n${CYAN}[1] Validate Configuration File${NC}"
+    echo -e "    Checks for syntax errors, key formats, and permissions."
+    
+    echo -e "\n${CYAN}[2] Test Connectivity (Ping Peer)${NC}"
+    echo -e "    Pings the other end of the tunnel."
+    
+    echo -e "\n${CYAN}[3] Check Handshake Status${NC}"
+    echo -e "    Verifies if keys are exchanged successfully."
+    
+    echo -e "\n${CYAN}[4] Return to Main Menu${NC}"
+    
+    read -p "  Select Option: " d_choice
+    
+    case $d_choice in
+        1) validate_config ;;
+        2) test_connection ;;
+        3) check_handshake ;;
+        4) show_menu ;;
+        *) diagnostics_menu ;;
+    esac
+}
+
+validate_config() {
+    echo -e "\n${YELLOW}--- Validating Config ---${NC}"
+    if [[ ! -f "$WG_CONF" ]]; then
+        echo -e "${RED}[FAIL] Config file missing at $WG_CONF${NC}"
+    else
+        echo -e "${GREEN}[PASS] Config file exists.${NC}"
+        # Check permissions
+        PERM=$(stat -c "%a" "$WG_CONF")
+        if [[ "$PERM" != "600" ]]; then
+             echo -e "${YELLOW}[WARN] Permissions are $PERM (should be 600). Fixing...${NC}"
+             chmod 600 "$WG_CONF"
+             echo -e "${GREEN}[FIXED] Permissions set to 600.${NC}"
+        else
+             echo -e "${GREEN}[PASS] Permissions are secure (600).${NC}"
+        fi
+        
+        # Check for placeholder
+        if grep -q "INSERT_IRAN_PUBLIC_KEY_HERE" "$WG_CONF"; then
+             echo -e "${RED}[FAIL] Placeholder key found! You must add the Iran Peer Public Key.${NC}"
+             echo -e "${YELLOW}[TIP] Use 'Add Iran Peer' option from the main menu.${NC}"
+        else
+             echo -e "${GREEN}[PASS] No placeholder keys found.${NC}"
+        fi
+    fi
+    read -p "Press Enter..."
+    diagnostics_menu
+}
+
+test_connection() {
+    echo -e "\n${YELLOW}--- Testing Connectivity ---${NC}"
+    # Determine Peer IP
+    MY_IP=$(ip -4 addr show wg0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -n1)
+    
+    if [[ -z "$MY_IP" ]]; then
+         echo -e "${RED}[FAIL] Interface wg0 is DOWN.${NC}"
+         read -p "Press Enter..."
+         diagnostics_menu
+         return
+    fi
+    
+    if [[ "$MY_IP" == "10.0.0.1" ]]; then
+        TARGET="10.0.0.2"
+        ROLE="Kharej"
+    else
+        TARGET="10.0.0.1"
+        ROLE="Iran"
+    fi
+    
+    echo -e "Current Role: $ROLE ($MY_IP)"
+    echo -e "Pinging Peer: $TARGET"
+    
+    if ping -c 4 -W 1 "$TARGET"; then
+        echo -e "\n${GREEN}[SUCCESS] Connection is establish and working!${NC}"
+    else
+        echo -e "\n${RED}[FAIL] Peer Unreachable.${NC}"
+        echo -e "${YELLOW}[TIP] Check: 1. Firewalls (UDP ports open?) 2. Correct Keys? 3. Is Peer Online?${NC}"
+    fi
+    read -p "Press Enter..."
+    diagnostics_menu
+}
+
+check_handshake() {
+    echo -e "\n${YELLOW}--- Handshake Status ---${NC}"
+    LATEST_HANDSHAKE=$(wg show wg0 latest-handshakes | awk '{print $2}')
+    
+    if [[ -z "$LATEST_HANDSHAKE" ]]; then
+         echo -e "${RED}[FAIL] No handshake data found.${NC}"
+    elif [[ "$LATEST_HANDSHAKE" == "0" ]]; then
+         echo -e "${RED}[FAIL] No handshake ever completed.${NC}"
+         echo -e "Possible causes: Wrong Keys, Firewall blocking UDP, different PresharedKeys."
+    else
+         CURRENT_TIME=$(date +%s)
+         DIFF=$((CURRENT_TIME - LATEST_HANDSHAKE))
+         if [[ "$DIFF" -lt 180 ]]; then
+             echo -e "${GREEN}[PASS] Last handshake: $DIFF seconds ago (Healthy)${NC}"
+         else
+             echo -e "${RED}[WARN] Last handshake: $DIFF seconds ago (Stale)${NC}"
+             echo -e "Connection might be lost."
+         fi
+    fi
+    wg show wg0
+    read -p "Press Enter..."
+    diagnostics_menu
 }
 
 #===========================================
