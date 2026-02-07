@@ -210,7 +210,7 @@ EOF
     echo -e "\n${RED}[IMPORTANT]${NC} We need the Iran Server's Public Key to finish configuration."
     echo -e "If you haven't set up the Iran server yet, you can come back and edit ${BOLD}$WG_CONF${NC} later."
     echo -e "For now, I'll put a placeholder 'INSERT_IRAN_PUBLIC_KEY_HERE' in the config."
-    sed -i "s/REPLACE_ME_WITH_IRAN_PUBKEY/INSERT_IRAN_PUBLIC_KEY_HERE/g" "$WG_CONF"
+    sed -i "s|REPLACE_ME_WITH_IRAN_PUBKEY|INSERT_IRAN_PUBLIC_KEY_HERE|g" "$WG_CONF"
 
     # Save keys for display
     echo "$PRIVATE_KEY" > params
@@ -308,7 +308,6 @@ EOF
     fi
     
     # Append PostUp/PostDown to config
-    # Append PostUp/PostDown to config
     echo "" >> "$WG_CONF"
     echo "PostUp = iptables -t nat -A PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT" >> "$WG_CONF"
     echo "PostUp = iptables -t nat -A POSTROUTING -o $WG_IFACE -j MASQUERADE" >> "$WG_CONF"
@@ -381,6 +380,12 @@ add_iran_peer() {
     
     # Validate Key format (simple base64 check)
     if [[ ! "$IRAN_PUB_KEY" =~ ^[A-Za-z0-9+/]{42}[=]{0,2}$ ]]; then
+        # Sometimes keys might be slightly different or user copy-paste includes whitespace
+        # Let's try to be less strict or trim whitespace
+        IRAN_PUB_KEY=$(echo "$IRAN_PUB_KEY" | xargs)
+    fi
+     
+    if [[ ! "$IRAN_PUB_KEY" =~ ^[A-Za-z0-9+/=]{40,50}$ ]]; then
         echo -e "${RED}[WARNING] Key doesn't look like a valid WireGuard Public Key.${NC}"
         read -p "Proceed anyway? [y/N]: " confirm
         if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -393,7 +398,7 @@ add_iran_peer() {
     
     # If placeholder exists, replace it
     if grep -q "INSERT_IRAN_PUBLIC_KEY_HERE" "$WG_CONF"; then
-        sed -i "s/INSERT_IRAN_PUBLIC_KEY_HERE/$IRAN_PUB_KEY/" "$WG_CONF"
+        sed -i "s|INSERT_IRAN_PUBLIC_KEY_HERE|$IRAN_PUB_KEY|" "$WG_CONF"
         echo -e "${GREEN}[✓] Placeholder replaced with real key.${NC}"
     else
         # Use wg set to update peer
