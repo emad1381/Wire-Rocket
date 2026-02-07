@@ -326,9 +326,9 @@ setup_iran() {
     echo -e "\n${YELLOW}[?]${NC} Enter Preshared Key (from Kharej):"
     read -p "  > " PRESHARED_KEY
 
-    # Create Config
+    # Create Config - MINIMAL config, no iptables to avoid internet issues
+    # iptables rules can be added later via Port Forwarding menu if needed
     WG_PORT=$(random_port)
-    DEFAULT_IFACE=$(detect_default_interface)
     cat > "$WG_CONF" << EOF
 [Interface]
 Address = 10.0.0.2/30
@@ -342,13 +342,6 @@ PresharedKey = $PRESHARED_KEY
 Endpoint = $KHAREJ_IP:$KHAREJ_PORT
 AllowedIPs = 10.0.0.0/30
 PersistentKeepalive = 20
-
-PostUp = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; iptables -A FORWARD -i %i -j ACCEPT
-PostUp = iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null; iptables -A FORWARD -o %i -j ACCEPT
-PostUp = iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null; true
-PostDown = iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null; true
-PostDown = iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -s 10.0.0.0/30 -j MASQUERADE 2>/dev/null; true
 EOF
     
     chmod 600 "$WG_CONF"
