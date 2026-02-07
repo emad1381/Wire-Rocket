@@ -264,7 +264,7 @@ setup_iran() {
 Address = 10.0.0.2/30
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
-DNS = 1.1.1.1
+# DNS = 1.1.1.1 # Commented out to avoid resolvconf issues on some VPS
 
 [Peer]
 PublicKey = $KHAREJ_PUB_KEY
@@ -296,6 +296,12 @@ EOF
     
     # We need to find the default interface, usually eth0 but could be ens3, etc.
     DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+    if [[ -z "$DEFAULT_IFACE" ]]; then
+        DEFAULT_IFACE="eth0"
+        echo -e "${YELLOW}[WARNING] Could not detect default interface, assuming 'eth0'. Check configuration if network fails.${NC}"
+    else
+        echo -e "${GREEN}[✓] Detected default interface: $DEFAULT_IFACE${NC}"
+    fi
     
     # Append PostUp/PostDown to config
     cat >> "$WG_CONF" << EOF
@@ -306,9 +312,24 @@ PostDown = iptables -t nat -D PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWA
 PostDown = iptables -t nat -D POSTROUTING -o $WG_IFACE -j MASQUERADE
 EOF
 
-    # Start Interface
-    systemctl enable wg-quick@wg0 >/dev/null 2>&1
-    systemctl start wg-quick@wg0 >/dev/null 2>&1
+    # Start Interface with Error Handling
+    echo -e "\n${CYAN}[*]${NC} Starting Wire-Rocket Interface..."
+    
+    # Temporarily disable exit on error to catch start failure
+    set +e
+    systemctl stop wg-quick@wg0 >/dev/null 2>&1
+    wg-quick down wg0 >/dev/null 2>&1
+    
+    if wg-quick up wg0; then
+        systemctl enable wg-quick@wg0 >/dev/null 2>&1
+        echo -e "${GREEN}[✓] Interface started successfully!${NC}"
+    else
+        echo -e "${RED}[X] Failed to start WireGuard interface!${NC}"
+        echo -e "${YELLOW}[DEBUG] Check 'systemctl status wg-quick@wg0' or 'journalctl -xe' for details.${NC}"
+        echo -e "${YELLOW}[NOTE] You can still proceed, but the tunnel is not active yet.${NC}"
+        # Do not exit, show keys so user can fix config later
+    fi
+    set -e
     
     echo -e "\n${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
     echo -e "${GREEN}║${NC}  ${BOLD}SETUP COMPLETE${NC}                                        ${GREEN}║${NC}"
