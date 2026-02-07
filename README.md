@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Bash-4EAA25?style=for-the-badge&logo=gnu-bash&logoColor=white" alt="Bash"/>
 </p>
 
-<h1 align="center">🚀 RocketTunnel</h1>
+<h1 align="center">🚀 Wire-Rocket</h1>
 
 <p align="center">
   <strong>The Fastest & Most Reliable WireGuard Tunneling Solution</strong><br>
@@ -151,7 +151,7 @@ You should see:
 
 ```
 ╔══════════════════════════════════════════════╗
-║           🚀 RocketTunnel v1.0               ║
+║           🚀 Wire-Rocket v1.0                ║
 ╠══════════════════════════════════════════════╣
 ║  [1] Install / Update Tunnel                 ║
 ║  [2] Show Tunnel Status                      ║
@@ -261,7 +261,7 @@ The script is designed to NOT affect your SSH connection. However, if you lose S
 | Private Key | `/etc/wireguard/privatekey` |
 | Public Key | `/etc/wireguard/publickey` |
 | Preshared Key | `/etc/wireguard/presharedkey` |
-| RocketTunnel Script | `/usr/local/bin/rocket.sh` |
+| Wire-Rocket Script | `/usr/local/bin/rocket.sh` |
 
 ---
 

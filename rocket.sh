@@ -1,6 +1,6 @@
 #!/bin/bash
 #===========================================
-#  RocketTunnel Main Logic Script
+#  Wire-Rocket Main Logic Script
 #  Interactive Dashboard & WireGuard Setup
 #===========================================
 
@@ -69,15 +69,16 @@ show_header() {
     clear
     echo -e "${MAGENTA}"
     cat << "EOF"
-    ____             __        __ ______                       __
-   / __ \____  _____/ /_____  / //_  __/_  ______  ____  ___  / /
-  / /_/ / __ \/ ___/ //_/ _ \/ __// / / / / / __ \/ __ \/ _ \/ / 
- / _, _/ /_/ / /__/ ,< /  __/ /_ / / / /_/ / / / / / / /  __/ /  
-/_/ |_|\____/\___/_/|_|\___/\__//_/  \__,_/_/ /_/_/ /_/\___/_/   
+ _       __  _                   ____             __        __ 
+| |     / / (_)_____ ___        / __ \____  _____/ /_____  / /_
+| | /| / / / / ___// _ \______ / /_/ / __ \/ ___/ //_/ _ \/ __/
+| |/ |/ / / / /   /  __/_____// _, _/ /_/ / /__/ ,< /  __/ /_  
+|__/|__/_/_/_/    \___/      /_/ |_|\____/\___/_/|_|\___/\__/  
+                                                               
 EOF
     echo -e "${NC}"
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}  ${BOLD}RocketTunnel Control Panel${NC}                              ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}Wire-Rocket Control Panel${NC}                                 ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -374,14 +375,14 @@ view_config() {
 }
 
 uninstall_tunnel() {
-    echo -e "\n${RED}[WARNING]${NC} This will remove RocketTunnel and WireGuard configuration."
+    echo -e "\n${RED}[WARNING]${NC} This will remove Wire-Rocket and WireGuard configuration."
     read -p "Are you sure? [y/N]: " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         systemctl stop wg-quick@wg0 >/dev/null 2>&1 || true
         systemctl disable wg-quick@wg0 >/dev/null 2>&1 || true
         rm -rf /etc/wireguard/wg0.conf
-        rm -rf /usr/local/bin/rockettunnel
-        rm -rf /usr/local/bin/rt
+        rm -rf /usr/local/bin/wire-rocket
+        rm -rf /usr/local/bin/wr
         # Optionally remove Install path if it's there
         rm -f "/usr/local/bin/rocket.sh"
         

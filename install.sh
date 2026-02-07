@@ -1,6 +1,6 @@
 #!/bin/bash
 #===========================================
-#  RocketTunnel Installer
+#  Wire-Rocket Installer
 #  One-liner installation script
 #===========================================
 
@@ -23,19 +23,19 @@ INSTALL_PATH="/usr/local/bin/rocket.sh"
 # Functions
 #===========================================
 
-print_banner() {
+    print_banner() {
     echo -e "${MAGENTA}"
     cat << "EOF"
-    ____             __        __ ______                       __
-   / __ \____  _____/ /_____  / //_  __/_  ______  ____  ___  / /
-  / /_/ / __ \/ ___/ //_/ _ \/ __// / / / / / __ \/ __ \/ _ \/ / 
- / _, _/ /_/ / /__/ ,< /  __/ /_ / / / /_/ / / / / / / /  __/ /  
-/_/ |_|\____/\___/_/|_|\___/\__//_/  \__,_/_/ /_/_/ /_/\___/_/   
-                                                                   
+ _       __  _                   ____             __        __ 
+| |     / / (_)_____ ___        / __ \____  _____/ /_____  / /_
+| | /| / / / / ___// _ \______ / /_/ / __ \/ ___/ //_/ _ \/ __/
+| |/ |/ / / / /   /  __/_____// _, _/ /_/ / /__/ ,< /  __/ /_  
+|__/|__/_/_/_/    \___/      /_/ |_|\____/\___/_/|_|\___/\__/  
+                                                               
 EOF
     echo -e "${NC}"
     echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║${NC}  ${BOLD}RocketTunnel${NC} - Fast WireGuard Tunneling Solution       ${CYAN}║${NC}"
+    echo -e "${CYAN}║${NC}  ${BOLD}Wire-Rocket${NC} - Fast WireGuard Tunneling Solution        ${CYAN}║${NC}"
     echo -e "${CYAN}║${NC}  ${GREEN}Version: 1.0${NC}                                           ${CYAN}║${NC}"
     echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -94,7 +94,7 @@ install_dependencies() {
 }
 
 download_rocket_script() {
-    echo -e "\n${CYAN}[*]${NC} Downloading RocketTunnel main script..."
+    echo -e "\n${CYAN}[*]${NC} Downloading Wire-Rocket main script..."
     
     # Check if rocket.sh exists in current directory (for local install)
     if [[ -f "./rocket.sh" ]]; then
@@ -117,11 +117,11 @@ download_rocket_script() {
 
 create_symlink() {
     # Create a convenient alias
-    if [[ ! -L /usr/local/bin/rockettunnel ]]; then
-        ln -sf "$INSTALL_PATH" /usr/local/bin/rockettunnel 2>/dev/null || true
+    if [[ ! -L /usr/local/bin/wire-rocket ]]; then
+        ln -sf "$INSTALL_PATH" /usr/local/bin/wire-rocket 2>/dev/null || true
     fi
-    if [[ ! -L /usr/local/bin/rt ]]; then
-        ln -sf "$INSTALL_PATH" /usr/local/bin/rt 2>/dev/null || true
+    if [[ ! -L /usr/local/bin/wr ]]; then
+        ln -sf "$INSTALL_PATH" /usr/local/bin/wr 2>/dev/null || true
     fi
 }
 
@@ -160,10 +160,10 @@ print_success() {
     echo -e "${GREEN}║${NC}  ${BOLD}✓ Installation Complete!${NC}                               ${GREEN}║${NC}"
     echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  ${CYAN}To launch RocketTunnel, run:${NC}"
+    echo -e "  ${CYAN}To launch Wire-Rocket, run:${NC}"
     echo -e "    ${BOLD}rocket.sh${NC}"
     echo -e "  ${CYAN}Or use the short alias:${NC}"
-    echo -e "    ${BOLD}rt${NC}"
+    echo -e "    ${BOLD}wr${NC}"
     echo ""
     echo -e "  ${YELLOW}Would you like to start the dashboard now? [Y/n]${NC}"
 }
