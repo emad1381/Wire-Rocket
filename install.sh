@@ -84,10 +84,10 @@ install_dependencies() {
     
     if [[ $PKG_MANAGER == "apt" ]]; then
         apt update -qq
-        apt install -y -qq wireguard-tools iptables curl net-tools qrencode
+        apt install -y -qq wireguard-tools iptables curl net-tools qrencode haproxy
     else
         $PKG_MANAGER install -y epel-release
-        $PKG_MANAGER install -y wireguard-tools iptables curl net-tools qrencode
+        $PKG_MANAGER install -y wireguard-tools iptables curl net-tools qrencode haproxy
     fi
     
     echo -e "${GREEN}[✓]${NC} Dependencies installed successfully!"

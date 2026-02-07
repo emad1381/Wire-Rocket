@@ -8,6 +8,7 @@ set -e
 
 # Configuration
 WG_CONF="/etc/wireguard/wg0.conf"
+HAPROXY_CFG="/etc/haproxy/haproxy.cfg"
 WG_IFACE="wg0"
 WG_PORT_RANGE_START=50000
 WG_PORT_RANGE_END=65000
@@ -89,19 +90,21 @@ show_menu() {
     echo -e "  ${GREEN}[2]${NC} Show Tunnel Status"
     echo -e "  ${GREEN}[3]${NC} View Config / Keys"
     echo -e "  ${MAGENTA}[4]${NC} Add Iran Peer (For Kharej Server)"
-    echo -e "  ${BLUE}[5]${NC} Validate Config & Test Connection"
-    echo -e "  ${RED}[6]${NC} Uninstall"
-    echo -e "  ${RED}[7]${NC} Exit"
+    echo -e "  ${YELLOW}[5]${NC} Port Forwarding Management (HAProxy)"
+    echo -e "  ${BLUE}[6]${NC} Validate Config & Test Connection"
+    echo -e "  ${RED}[7]${NC} Uninstall"
+    echo -e "  ${RED}[8]${NC} Exit"
     echo ""
-    read -p "  Select an option [1-7]: " choice
+    read -p "  Select an option [1-8]: " choice
     case $choice in
         1) install_tunnel ;;
         2) show_status ;;
         3) view_config ;;
         4) add_iran_peer ;;
-        5) diagnostics_menu ;;
-        6) uninstall_tunnel ;;
-        7) exit 0 ;;
+        5) port_forwarding_menu ;;
+        6) diagnostics_menu ;;
+        7) uninstall_tunnel ;;
+        8) exit 0 ;;
         *) echo -e "${RED}Invalid option!${NC}"; sleep 1; show_menu ;;
     esac
 }
@@ -269,6 +272,7 @@ Address = 10.0.0.2/30
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
 # DNS = 1.1.1.1 # Commented out to avoid resolvconf issues on some VPS
+Table = off  # Prevents WireGuard from overwriting default route
 
 [Peer]
 PublicKey = $KHAREJ_PUB_KEY
@@ -281,38 +285,52 @@ EOF
     chmod 600 "$WG_CONF"
     echo -e "${GREEN}[✓]${NC} Config created at $WG_CONF"
 
-    # Setup Port Forwarding
-    echo -e "\n${YELLOW}[?]${NC} Enter local port to forward to Kharej (e.g. 443):"
-    read -p "  > " FORWARD_PORT
-    FORWARD_PORT=${FORWARD_PORT:-443} # Default to 443
+    # Add custom routing for the tunnel subnet
+    # We need to manually add the route for the tunnel IP range, but since Address is /30, kernel does it for link-local.
+    # But if we want to route specific traffic through it, we do it via policy routing or just for the peer.
+    # Actually, for a relay server, we DON'T want all traffic to go through tunnel.
+    # We only want traffic explicitly forwarded (by HAProxy or DNAT) to go there.
+    # So `AllowedIPs = 0.0.0.0/0` is fine for PERMISSION, but `Table = off` prevents it from being the DEFAULT ROUTE.
+    
+    # We also need to ensure the route to the endpoint (Kharej IP) goes through the physical interface (default gateway).
+    # Since we set Table = off, the default route remains untouched (going to Internet).
+    # HAProxy will just Proxy traffic to 10.0.0.1, which is on the link.
+    
 
-    echo -e "\n${CYAN}[*]${NC} Configuring iptables forwarding rules..."
-    
-    # Enable Forwarding just in case
-    sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
-
-    # Cleanup old rules if any (simple flush of specific chains might be safer but for this script we append)
-    # We will add them to PostUp/PostDown to persist
-    
-    # Update Config with Forwarding Rules
-    # Forward port $FORWARD_PORT on eth0 -> 10.0.0.1:$FORWARD_PORT (Kharej Tunnel IP)
-    # Note: Traffic comes to eth0:443 -> DNAT to 10.0.0.1:443 -> Goes through wg0 -> Reaches Kharej
-    
-    # We need to find the default interface, usually eth0 but could be ens3, etc.
-    DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
-    if [[ -z "$DEFAULT_IFACE" ]]; then
-        DEFAULT_IFACE="eth0"
-        echo -e "${YELLOW}[WARNING] Could not detect default interface, assuming 'eth0'. Check configuration if network fails.${NC}"
-    else
-        echo -e "${GREEN}[✓] Detected default interface: $DEFAULT_IFACE${NC}"
-    fi
-    
-    # Append PostUp/PostDown to config
+    # Append PostUp/PostDown to config (ONLY MASQUERADE for NAT, no specific ports)
     echo "" >> "$WG_CONF"
-    echo "PostUp = iptables -t nat -A PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT" >> "$WG_CONF"
     echo "PostUp = iptables -t nat -A POSTROUTING -o $WG_IFACE -j MASQUERADE" >> "$WG_CONF"
-    echo "PostDown = iptables -t nat -D PREROUTING -i $DEFAULT_IFACE -p tcp --dport $FORWARD_PORT -j DNAT --to-destination 10.0.0.1:$FORWARD_PORT" >> "$WG_CONF"
     echo "PostDown = iptables -t nat -D POSTROUTING -o $WG_IFACE -j MASQUERADE" >> "$WG_CONF"
+    
+    # Initialize HAProxy Config if not present
+    if [[ ! -f "$HAPROXY_CFG" ]]; then
+        cat > "$HAPROXY_CFG" << EOF
+global
+    log /dev/log    local0
+    log /dev/log    local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    log     global
+    mode    tcp
+    option  tcplog
+    option  dontlognull
+    timeout connect 5000
+    timeout client  50000
+    timeout server  50000
+
+# Wire-Rocket Port Forwards will be added below
+EOF
+    fi
+
+    echo -e "\n${CYAN}[*] Enabling HAProxy Service...${NC}"
+    systemctl enable haproxy >/dev/null 2>&1
+    systemctl restart haproxy >/dev/null 2>&1
 
     # Start Interface with Error Handling
     echo -e "\n${CYAN}[*]${NC} Starting Wire-Rocket Interface..."
@@ -340,7 +358,7 @@ EOF
     echo ""
     echo -e "${YELLOW}[IMPORTANT]${NC} Make sure to add this Public Key to the Kharej server config!"
     echo -e "Command to run on Kharej: ${BOLD}wg set wg0 peer $PUBLIC_KEY allowed-ips 10.0.0.2/32${NC}"
-    echo -e "Traffic on port ${BOLD}$FORWARD_PORT${NC} is now forwarded to Kharej."
+    echo -e "Use ${BOLD}Port Forwarding Management${NC} menu to add ports."
     
     read -p "Press Enter to return to menu..."
     show_menu
@@ -414,6 +432,203 @@ add_iran_peer() {
     echo -e "${GREEN}[✓] Configuration updated and interface restarted!${NC}"
     read -p "Press Enter to return to menu..."
     show_menu
+}
+
+#===========================================
+# Port Forwarding (HAProxy)
+#===========================================
+
+port_forwarding_menu() {
+    show_header
+    echo -e "${YELLOW}--- Port Forwarding Management (HAProxy) ---${NC}"
+    echo -e "\n${CYAN}[1] Add New Port Forward${NC}"
+    echo -e "${CYAN}[2] List Active Forwards${NC}"
+    echo -e "${CYAN}[3] Remove Port Forward${NC}"
+    echo -e "${CYAN}[4] Validate Port (Check Listening)${NC}"
+    echo -e "${CYAN}[5] Return to Main Menu${NC}"
+    
+    read -p "  Select Option: " pf_choice
+    case $pf_choice in
+        1) add_haproxy_forward ;;
+        2) list_haproxy_forwards ;;
+        3) remove_haproxy_forward ;;
+        4) validate_port_forward ;;
+        5) show_menu ;;
+        *) port_forwarding_menu ;;
+    esac
+}
+
+add_haproxy_forward() {
+    echo -e "\n${YELLOW}--- Add Port Forward ---${NC}"
+    
+    read -p "  Enter Local Port (Iran Server) [e.g. 443]: " L_PORT
+    if [[ -z "$L_PORT" ]]; then echo -e "${RED}Port required!${NC}"; sleep 1; port_forwarding_menu; return; fi
+    
+    read -p "  Enter Destination IP (Tunnel Endpoint) [default: 10.0.0.1]: " D_IP
+    D_IP=${D_IP:-10.0.0.1}
+    
+    read -p "  Enter Destination Port (Target Service) [default: $L_PORT]: " D_PORT
+    D_PORT=${D_PORT:-$L_PORT}
+    
+    # Check if port is already used in haproxy
+    if grep -q "frontend ft_$L_PORT" "$HAPROXY_CFG"; then
+        echo -e "${RED}[ERROR] Port $L_PORT is already configured in HAProxy!${NC}"
+        read -p "Press Enter..."
+        port_forwarding_menu
+        return
+    fi
+    
+    # Check system port usage
+    if ss -tuln | grep -q ":$L_PORT "; then
+        echo -e "${YELLOW}[WARNING] Port $L_PORT seems to be in use by another process!${NC}"
+        read -p "Proceed anyway? (HAProxy might fail to start) [y/N]: " confirm
+        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then port_forwarding_menu; return; fi
+    fi
+
+    echo -e "\n${CYAN}[*] Adding rule to HAProxy...${NC}"
+    
+    cat >> "$HAPROXY_CFG" << EOF
+
+frontend ft_$L_PORT
+    bind *:$L_PORT
+    mode tcp
+    default_backend bk_$L_PORT
+
+backend bk_$L_PORT
+    mode tcp
+    server kharej $D_IP:$D_PORT check
+EOF
+
+    echo -e "${CYAN}[*] Reloading HAProxy...${NC}"
+    if systemctl reload haproxy; then
+        echo -e "${GREEN}[✓] Port Forward Added: $L_PORT -> $D_IP:$D_PORT${NC}"
+    else
+        echo -e "${RED}[X] Failed to reload HAProxy! Check config syntax.${NC}"
+        # detailed check
+        haproxy -c -f "$HAPROXY_CFG"
+    fi
+    
+    read -p "Press Enter..."
+    port_forwarding_menu
+}
+
+list_haproxy_forwards() {
+    echo -e "\n${YELLOW}--- Active HAProxy Forwards ---${NC}"
+    if [[ ! -f "$HAPROXY_CFG" ]]; then
+        echo -e "${RED}Config not found.${NC}"
+    else
+        grep -E "frontend ft_|bind|server kharej" "$HAPROXY_CFG" | sed 's/frontend ft_/\n--- Rule: /'
+    fi
+    echo ""
+    read -p "Press Enter..."
+    port_forwarding_menu
+}
+
+remove_haproxy_forward() {
+    echo -e "\n${YELLOW}--- Remove Port Forward ---${NC}"
+    # List available ports to remove
+    PORTS=$(grep "frontend ft_" "$HAPROXY_CFG" | awk -F'ft_' '{print $2}')
+    
+    if [[ -z "$PORTS" ]]; then
+        echo -e "${RED}No forwarding rules found.${NC}"
+        read -p "Press Enter..."
+        port_forwarding_menu
+        return
+    fi
+    
+    echo -e "Available Ports:"
+    echo "$PORTS"
+    echo ""
+    read -p "  Enter Port to Remove: " R_PORT
+    
+    if [[ -z "$R_PORT" ]]; then port_forwarding_menu; return; fi
+    
+    if ! grep -q "frontend ft_$R_PORT" "$HAPROXY_CFG"; then
+        echo -e "${RED}Port not found in config!${NC}"
+    else
+        # Remove the block. HAProxy config blocks are tricky to remove with simple sed.
+        # We assume standard format: frontend block then backend block.
+        # Strategy: Read file, exclude lines belonging to this port's block.
+        # This is a bit complex in bash. 
+        # Simpler approach: Create a temp file without the specific named sections.
+        
+        # We'll use a slightly safer method: comment them out or use perl/sed ranges if possible.
+        # Or, since we structured it well:
+        # frontend ft_PORT ...
+        # backend bk_PORT ...
+        
+        # We will strip lines containing the port identifier in the section names 
+        # AND the subsequent lines until next section? No, that's risky.
+        
+        # Robust method: Re-write file excluding the logic. 
+        # Given the complexity of robustly editing config files in bash, 
+        # we warn the user or try a focused sed deletion of known structure.
+        
+        # Deleting 4 lines starting from match? risky if config varies.
+        # Let's try to match the exact block structure we generated.
+        
+        # Block 1: frontend ft_$R_PORT ... default_backend bk_$R_PORT
+        # Block 2: backend bk_$R_PORT ... server kharej ...
+        
+        # We will clear the file of these specific named sections.
+        # Using sed to delete range is hard if we don't know end.
+        # BUT, we know our generation format.
+        
+        cp "$HAPROXY_CFG" "${HAPROXY_CFG}.bak"
+        
+        # Correct sed logic to remove custom blocks
+        # Delete from 'frontend ft_PORT' to empty line?
+        # Our generator puts empty lines.
+        
+        # Let's use a loop or python if available? No, stick to bash.
+        # We will use grep -v to filter out the relevant lines if they have unique IDs.
+        # But 'bind', 'mode', 'server' are common.
+        
+        # Senior approach: Read file line by line, skip blocks matching target.
+        T_FILE=$(mktemp)
+        SKIP=0
+        while IFS= read -r line; do
+            if [[ "$line" == "frontend ft_$R_PORT" ]]; then SKIP=1; fi
+            if [[ "$line" == "backend bk_$R_PORT" ]]; then SKIP=1; fi
+            
+            if [[ "$SKIP" -eq 1 ]]; then
+                # Check when to stop skipping. 
+                # If we hit an empty line or next section?
+                # Our blocks are separated by empty lines usually.
+                # If we encounter a new 'frontend' or 'backend' that is NOT ours, we stop skipping?
+                # Or just empty line.
+                 if [[ -z "$line" ]]; then SKIP=0; fi
+            else
+                echo "$line" >> "$T_FILE"
+            fi
+        done < "$HAPROXY_CFG"
+        
+        mv "$T_FILE" "$HAPROXY_CFG"
+        
+        echo -e "${GREEN}[✓] Removed rules for port $R_PORT.${NC}"
+        systemctl reload haproxy
+    fi
+    
+    read -p "Press Enter..."
+    port_forwarding_menu
+}
+
+validate_port_forward() {
+    echo -e "\n${YELLOW}--- Validate Port ---${NC}"
+    read -p "  Enter Port to Check: " V_PORT
+    
+    if ss -tuln | grep -q ":$V_PORT "; then
+        echo -e "${GREEN}[PASS] Port $V_PORT is open and listening.${NC}"
+        # Check process
+        PID=$(ss -lptn "sport = :$V_PORT" | grep -oP 'pid=\K\d+')
+        echo -e "Process ID: $PID"
+        ps -p $PID -o comm=
+    else
+        echo -e "${RED}[FAIL] Port $V_PORT is NOT listening.${NC}"
+        echo -e "Check if HAProxy is running: systemctl status haproxy"
+    fi
+    read -p "Press Enter..."
+    port_forwarding_menu
 }
 
 diagnostics_menu() {
