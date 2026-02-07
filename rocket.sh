@@ -241,6 +241,16 @@ EOF
     echo -e "${YELLOW}[NOTE]${NC} Copy these values to the Iran server setup!"
     echo -e "${YELLOW}[ACTION]${NC} After setting up Iran, get its Public Key and run: ${BOLD}wg set wg0 peer <IRAN_PUBKEY> allowed-ips 10.0.0.2/32${NC}"
     
+    # Open Firewall Port
+    if command -v ufw &> /dev/null; then
+        ufw allow $WG_PORT/udp >/dev/null 2>&1
+        echo -e "${GREEN}[✓]${NC} Allowed port $WG_PORT/udp in UFW"
+    elif command -v firewall-cmd &> /dev/null; then
+        firewall-cmd --add-port=$WG_PORT/udp --permanent >/dev/null 2>&1
+        firewall-cmd --reload >/dev/null 2>&1
+        echo -e "${GREEN}[✓]${NC} Allowed port $WG_PORT/udp in Firewalld"
+    fi
+
     read -p "Press Enter to return to menu..."
     show_menu
 }
@@ -507,6 +517,17 @@ EOF
     echo -e "${CYAN}[*] Reloading HAProxy...${NC}"
     if systemctl reload haproxy; then
         echo -e "${GREEN}[✓] Port Forward Added: $L_PORT -> $D_IP:$D_PORT${NC}"
+        
+        # Open Firewall for this port
+        if command -v ufw &> /dev/null; then
+             ufw allow $L_PORT/tcp >/dev/null 2>&1
+             echo -e "${GREEN}[✓] Allowed port $L_PORT/tcp in UFW${NC}"
+        elif command -v firewall-cmd &> /dev/null; then
+             firewall-cmd --add-port=$L_PORT/tcp --permanent >/dev/null 2>&1
+             firewall-cmd --reload >/dev/null 2>&1
+             echo -e "${GREEN}[✓] Allowed port $L_PORT/tcp in Firewalld${NC}"
+        fi
+        
     else
         echo -e "${RED}[X] Failed to reload HAProxy! Check config syntax.${NC}"
         # detailed check

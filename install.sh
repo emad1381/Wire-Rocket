@@ -96,19 +96,16 @@ install_dependencies() {
 download_rocket_script() {
     echo -e "\n${CYAN}[*]${NC} Downloading Wire-Rocket main script..."
     
-    # Check if rocket.sh exists in current directory (for local install)
-    if [[ -f "./rocket.sh" ]]; then
-        echo -e "${YELLOW}[INFO]${NC} Found local rocket.sh, using local version..."
-        cp ./rocket.sh "$INSTALL_PATH"
+    # Always download fresh version to ensure latest updates
+    # Use timestamp to bust GitHub cache
+    TS=$(date +%s)
+    echo -e "${YELLOW}[INFO]${NC} downloading latest version from GitHub..."
+    if curl -sL "$ROCKET_SCRIPT_URL?t=$TS" -o "$INSTALL_PATH"; then
+        echo -e "${GREEN}[✓]${NC} Downloaded rocket.sh successfully!"
     else
-        # Download from URL
-        if curl -sL "$ROCKET_SCRIPT_URL" -o "$INSTALL_PATH"; then
-            echo -e "${GREEN}[✓]${NC} Downloaded rocket.sh successfully!"
-        else
-            echo -e "${RED}[ERROR]${NC} Failed to download rocket.sh"
-            echo -e "${YELLOW}[TIP]${NC} Make sure you have internet connection and the URL is correct."
-            exit 1
-        fi
+        echo -e "${RED}[ERROR]${NC} Failed to download rocket.sh"
+        echo -e "${YELLOW}[TIP]${NC} Check internet connection."
+        exit 1
     fi
     
     chmod +x "$INSTALL_PATH"
