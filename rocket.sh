@@ -170,6 +170,11 @@ setup_kharej() {
         : # Do nothing special for config endpoint on server side usually
     fi
 
+    # Detect Interface
+    DEFAULT_IFACE=$(ip route | grep default | awk '{print $5}' | head -n1)
+    DEFAULT_IFACE=${DEFAULT_IFACE:-eth0}
+    echo -e "${GREEN}[✓]${NC} Detected default interface: $DEFAULT_IFACE"
+
     # Create Config
     cat > "$WG_CONF" << EOF
 [Interface]
@@ -177,8 +182,8 @@ Address = 10.0.0.1/30
 ListenPort = $WG_PORT
 PrivateKey = $PRIVATE_KEY
 MTU = 1280
-PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -A FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -A POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
+PostDown = iptables -D FORWARD -i $WG_IFACE -j ACCEPT; iptables -t nat -D POSTROUTING -o $DEFAULT_IFACE -j MASQUERADE
 
 [Peer]
 # Iran Peer
